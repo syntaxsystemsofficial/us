@@ -1,64 +1,46 @@
-from flask import Flask, request, send_file
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import os
+from flask import Flask, request, send_file, jsonify
 import requests
-import time
+from bs4 import BeautifulSoup
+import os
 import tempfile
 
 app = Flask(__name__)
 
-@app.route('/api/vin', methods=['GET'])
-def get_vin_excel():
+@app.route("/api/vin", methods=["GET"])
+def get_excel():
     vin = request.args.get("vin")
     if not vin:
-        return {"error": "VIN not provided"}, 400
-
-    # Temp download dir for Vercel (must be writable)
-    download_dir = tempfile.mkdtemp()
-
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-dev-shm-usage')
-
-    driver = webdriver.Chrome(options=options)
+        return jsonify({"error": "VIN is required"}), 400
 
     try:
-        # Step 1: Open VIN page
         url = f"https://vpic.nhtsa.dot.gov/decoder/Decoder?VIN={vin}&ModelYear="
-        driver.get(url)
+        res = requests.get(url)
+        if res.status_code != 200:
+            return jsonify({"error": "Failed to load VIN page"}), 500
 
-        # Step 2: Click full report
-        WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.ID, "btnFullReport"))
-        ).click()
+        soup = BeautifulSoup(res.text, "html.parser")
 
-        # Step 3: Get Export to Excel href
-        export_link = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//a[contains(@href,'ExportToExcel')]"))
-        )
-        href = export_link.get_attribute("href")
+        # Find the ExportToExcel link
+        link_tag = soup.find("a", href=lambda href: href and "ExportToExcel" in href)
+        if not link_tag:
+            return jsonify({"error": "Excel export link not found"}), 404
 
-        # Step 4: Download Excel
-        response = requests.get(href)
-        if response.status_code == 200:
-            file_path = os.path.join(download_dir, f"{vin}.xlsx")
-            with open(file_path, "wb") as f:
-                f.write(response.content)
+        excel_url = "https://vpic.nhtsa.dot.gov" + link_tag["href"]
+        excel_response = requests.get(excel_url)
+
+        if excel_response.status_code == 200:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+            temp_file.write(excel_response.content)
+            temp_file.close()
 
             return send_file(
-                file_path,
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                temp_file.name,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 as_attachment=True,
                 download_name=f"{vin}.xlsx"
             )
         else:
-            return {"error": "Failed to download Excel"}, 500
+            return jsonify({"error": "Failed to download Excel"}), 500
 
-    finally:
-        driver.quit()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
