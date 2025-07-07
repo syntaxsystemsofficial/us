@@ -15,7 +15,7 @@ def get_excel():
     try:
         response = requests.get(excel_url)
 
-        if response.status_code == 200 and response.headers.get("Content-Type", "").startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+        if response.status_code == 200 and response.content:
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
             temp_file.write(response.content)
             temp_file.close()
@@ -27,7 +27,11 @@ def get_excel():
                 download_name=f"{vin}.xlsx"
             )
         else:
-            return jsonify({"error": "Excel file not available for this VIN"}), 404
+            return jsonify({"error": "Excel file not available or VIN is invalid"}), 404
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# For local test
+if __name__ == "__main__":
+    app.run(debug=True)
